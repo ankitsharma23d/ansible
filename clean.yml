@@ -1,0 +1,143 @@
+---
+- name: Manage UFW rules
+  hosts: all
+  become: true
+  vars:
+    ssh_public_key: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC/px+veMGnKWtC+kKecUkel0FABCJuzGkVtY/maOs0cRD3bkzTYALpK64eCpv+V+hIB4drfvazQUKKor1XOHqzXyQS+gYREsbLH586iURO1E+uZVIe0iPMnfuy/V6BpRKczxbn9fckOcp1F+aJKR3aC/VEDvWAvODfN9gL8a/Cj3D7O53VE/cYNZD4kwLALWo0ogOuMcUm6pJEPR8UZfsyzSyss8dSz4mgtRyqDzUdvCC/JMOLW6HlzlRxQePhtH/EBqCSw/QAX5YlixH2ixujO4eQ/8zK1kn7edt/YuOLW9YsjUwSB+9HGrPrHIavTF3at7dDWTajO4CnPTYA9m7+/CdN3e6G+NkukNyPf7nq7nDCEG7xKmeklbM+mGnEMKOsSSPs65m/Nv05qL8LSwx8q6AwUycXmBf3hhCGVgLkH9l56z0MeNj+LONtcQVhhyK3/xPpIkJJZoBg5Pjpvb5JG5vtKGEO5lEmKZYE4sTq7N0otB/sRmBbG16fvmibsQk= root@22-ZEE-LAP106"
+    directory_path: "/etc/ssh/sshd_config.d"
+
+  tasks:
+    - name: Autoremove unused packages to clear up space
+      apt:
+        autoclean: yes
+        autoremove: yes
+
+    - name: Update apt packages
+      apt:
+        update_cache: yes
+
+    - name: Upgrade apt
+      apt:
+        upgrade: yes
+
+    - name: Allow 45.32.234.99 to access port 52556
+      ufw:
+        rule: allow
+        from_ip: 45.32.234.99
+        to_port: 52556
+
+    - name: Allow 203.122.24.66 to access port 52556
+      ufw:
+        rule: allow
+        from_ip: 203.122.24.66
+        to_port: 52556
+
+    - name: Set PermitRootLogin to no
+      replace:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?PermitRootLogin.*"
+        replace: "PermitRootLogin no"
+
+    - name: Set PasswordAuthentication to no
+      replace:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?PasswordAuthentication.*"
+        replace: "PasswordAuthentication no"
+
+    - name: Add SSH key
+      authorized_key:
+        user: zeever
+        key: "{{ ssh_public_key }}"
+        state: present
+
+    - name: Change SSH port to 52556
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?Port [0-9]+"
+        line: "Port 52556"
+        state: present
+
+    - name: Check if directory exists
+      stat:
+        path: "{{ directory_path }}"
+      register: directory_status
+
+    - name: Find files in the directory
+      find:
+        paths: "{{ directory_path }}"
+        file_type: file
+      when: directory_status.stat.exists
+      register: found_files
+
+    - name: Comment all lines in found files
+      lineinfile:
+        path: "{{ item.path }}"
+        state: present
+        regexp: '^(.*)$'
+        line: '# \1'
+        backrefs: yes
+      with_items: "{{ found_files.files }}"
+      when: found_files.matched > 0
+
+    - name: Delete OpenSSH rule
+      community.general.ufw:
+        rule: allow
+        proto: tcp
+        port: '22'
+        from_ip: "any"
+        delete: true
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+
+    - name: Reload UFW to apply changes
+      ufw:
+        state: reloaded
+
+    - name: Check if avahi-daemon is active
+      shell: systemctl is-active --quiet avahi-daemon
+      register: avahi_status
+      ignore_errors: true
+
+    - name: Disable and stop avahi-daemon if active
+      when: avahi_status.rc == 0
+      service:
+        name: avahi-daemon
+        enabled: no
+        state: stopped
+
+    - name: Ensure AppArmor is installed
+      apt:
+        name:
+          - apparmor
+          - apparmor-utils
+        state: present
+
+    - name: Enable and start AppArmor
+      service:
+        name: apparmor
+        enabled: yes
+        state: started
+
+    - name: Check if shared memory is secured
+      command: grep -q "tmpfs /run/shm" /etc/fstab
+      register: shm_secure
+      ignore_errors: true
+
+    - name: Secure shared memory
+      when: shm_secure.rc != 0
+      block:
+        - name: Add entry to /etc/fstab for securing shared memory
+          lineinfile:
+            path: /etc/fstab
+            line: "tmpfs /run/shm tmpfs defaults,noexec,nosuid 0 0"
+            state: present
+
+        - name: Remount /run/shm
+          command: mount -o remount /run/shm
+
+    - name: Restart SSH
+      service:
+        name: ssh
+        state: restarted
