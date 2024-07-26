@@ -4,10 +4,16 @@
 
   tasks:
     - name: Check UFW status
-      ufw:
-        state: enabled
+      command: ufw status
       register: ufw_status
+      ignore_errors: true  # Ignore errors if UFW is not installed
 
     - name: Display UFW status
       debug:
-        msg: "UFW is {{ 'enabled' if ufw_status.changed else 'disabled' }}"
+        msg: "UFW status: {{ ufw_status.stdout }}"
+      when: ufw_status.rc == 0
+
+    - name: Handle case where UFW is not installed or disabled
+      debug:
+        msg: "UFW is either not installed or disabled."
+      when: ufw_status.rc != 0
