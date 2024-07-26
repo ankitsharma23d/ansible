@@ -1,0 +1,13 @@
+---
+- hosts: all
+  become: true
+
+  tasks:
+    - name: Check UFW status
+      ufw:
+        state: enabled
+      register: ufw_status
+
+    - name: Display UFW status
+      debug:
+        msg: "UFW is {{ 'enabled' if ufw_status.changed else 'disabled' }}"
